@@ -1,0 +1,387 @@
+function [output,newState]=Encoder(input,prevState)
+[~,lenOfInput]=size(input);
+newState=[input,prevState];
+newState(end-lenOfInput+1:end)=[];
+[~,lenState]=size(newState);
+s=0;
+% Output Algorithm
+for i=1:lenState-1
+    if(newState(i)==1)
+        
+        s=s+1;
+    end
+end
+output1=mod(s,2);
+s=0;
+for i=2:lenState
+    if(newState(i)==1)
+        s=s+1;
+    end
+end
+output2=mod(s,2);
+output=[output1,output2];
+end
+
+function Diagram=stateDiagram(noOfState,lenOfInput)
+Diagram=zeros(2^lenOfInput,noOfState,2);
+lenOfState=log2(noOfState);
+for input=1:2^lenOfInput
+    for state=1:noOfState
+        [output,nxtState]=Encoder(de2bi(input-1,lenOfInput,"left-msb"),de2bi(state-1,lenOfState,"left-msb"));
+        nxtState=bi2de(nxtState,"left-msb");
+        output=bi2de(output,"left-msb");
+        Diagram(input,state,1)=output;
+        Diagram(input,state,2)=nxtState;
+    end
+end
+end
+
+stateDiagram(8,2)
+
+function message=decoderHard(receivedOutput,lenOfOutput,noOfState,Diagram)
+
+%modifying format of received output for further process
+[~,Outsize]=size(receivedOutput);
+n=Outsize/lenOfOutput;
+receivedOutput=reshape(receivedOutput,lenOfOutput,n);
+receivedOutput=transpose(receivedOutput);
+receivedOutput=bi2de(receivedOutput,"left-msb");
+% receivedOutput=flip(receivedOutput);
+%now creating a array implementation of trellis tree
+weight=zeros(noOfState,n+1,2);
+weight(:,:,:)=Inf;
+for time=1:n+1
+    if(time~=1)
+        for state=1:noOfState
+            [PrevState,output]=PreviousState(state-1,Diagram);%state-1 is actual state
+            [~,Size]=size(PrevState);
+            wmin=Inf;
+            prev=Inf;
+            for counter=1:Size
+                w=weight(PrevState(counter)+1,time-1,1)+hammingDistance(receivedOutput(time-1),output(counter),lenOfOutput);
+                if(w<wmin)
+                    wmin=w;
+                    prev=PrevState(counter)+1;
+                end
+            end
+            weight(state,time,1)=wmin;
+            weight(state,time,2)=prev;%This previous state is actualState+1
+        end
+    else
+        weight(1,time,1)=0;
+    end
+end
+weight
+% We have now created Trellis tree
+pos=n;
+message=[];
+[~,indx]=min(weight(:,n+1,1));
+while pos>0
+    from1=weight(indx,pos+1,2)-1;
+    if(from1==Inf)
+        from=0;
+    else 
+        from=from1;
+    end
+    to=indx-1;
+    msg=InputForThistransition(from,to,Diagram);
+    message=[msg,message];
+    indx=from1+1;
+    pos=pos-1;
+end 
+end
+
+function message=decoderSoft(receivedOutput,lenOfOutput,noOfState,Diagram,Band)
+
+%modifying format of received output for further process
+[~,Outsize]=size(receivedOutput);
+n=Outsize/lenOfOutput;
+receivedOutput=reshape(receivedOutput,lenOfOutput,n);
+receivedOutput=transpose(receivedOutput)
+%now creating a array implementation of trellis tree
+weight=zeros(noOfState,n+1,2);
+weight(:,:,:)=Inf;
+for time=1:n+1
+    if(time~=1)
+        for state=1:noOfState
+            [PrevState,output]=PreviousState(state-1,Diagram);%state-1 is actual state
+            [~,Size]=size(PrevState);
+            wmin=Inf;
+            prev=Inf;
+            for counter=1:Size
+                w=weight(PrevState(counter)+1,time-1,1)+euclidDistance(receivedOutput(time-1,:),output(counter),lenOfOutput,Band);
+                if(w<wmin)
+                    wmin=w;
+                    prev=PrevState(counter)+1;
+                end
+            end
+            weight(state,time,1)=wmin;
+            weight(state,time,2)=prev;%This previous state is actualState+1
+        end
+    else
+        weight(1,time,1)=0;
+    end
+end
+weight
+% We have now created Trellis tree
+pos=n;
+message=[];
+[~,indx]=min(weight(:,n+1,1));
+while pos>0
+    from1=weight(indx,pos+1,2)-1;
+    if(from1==Inf)
+        from=0;
+    else 
+        from=from1;
+    end
+    to=indx-1;
+    msg=InputForThistransition(from,to,Diagram);
+    message=[msg,message];
+    indx=from1+1;
+    pos=pos-1;
+end
+end
+
+function z=hammingDistance(rcvdOutput,output,OutLen)
+rcvdOutput=de2bi(rcvdOutput,OutLen,"left-msb");
+output=de2bi(output,OutLen,"left-msb");
+e=xor(rcvdOutput,output);
+z=0;
+for i=1:OutLen
+    if(e(i)==1)
+        z=z+1;
+    end
+end
+end
+
+function z=euclidDistance(rcvdOutput,output,OutLen,Band)
+output=de2bi(output,OutLen,"left-msb");
+output=(Band-1)*output;
+dist=rcvdOutput-output;
+distT=transpose(dist);
+z=dist*distT;
+end
+
+function [prevState,output]=PreviousState(state,Diagram)
+[noOfInpCombn,u,~]=size(Diagram);
+prevState=[];
+output=[];
+for s=1:u
+    for in=1:noOfInpCombn
+        if(Diagram(in,s,2)==state)
+            prevState=[prevState,s-1];
+            output=[output,Diagram(in,s,1)];
+        end
+    end
+end
+end
+
+function inp=InputForThistransition(initialState,finalState,Diagram)
+[noOfInpCombn,~,~]=size(Diagram);
+lenOfInput=log2(noOfInpCombn);
+for inpVal=1:noOfInpCombn
+    if(Diagram(inpVal,initialState+1,2)==finalState)
+        inp=de2bi(inpVal-1,lenOfInput,"left-msb");
+    end
+end
+end
+
+function send=bpskSender(input,fc,Tsym,maxV)
+[~,sIn]=size(input);
+temp=(2*maxV)*input(:);
+input(:)=temp(:)-maxV;
+t=linspace(0,Tsym,Tsym*fc*1000);
+y=((2/Tsym)^0.5)*cos(2*pi*fc*t(:));
+send=[];
+for i=1:sIn
+    temp=input(i)*y(:);
+    temp=transpose(temp);
+    send=[send,temp];
+end
+end
+
+function input=BPSKSender(input,maxV)
+input(:)=(2*maxV)*input(:)-maxV;
+end
+
+function output=bpskSoftReceiver(input,fc,Tsym,noOfSym,lenOfOutput,maxV)
+t=linspace(0,Tsym,Tsym*fc*1000);
+y(:)=((2/Tsym)^(1/2))*cos(2*pi*fc*t(:));
+receive=[];
+for i=1:noOfSym
+    out=input((i-1)*Tsym*fc*1000+1:i*Tsym*fc*1000)*y(:);
+    out=out/(fc*1000);
+    receive=[receive,out];
+end
+receive=reshape(receive,lenOfOutput,[]);
+[~,noOfOut]=size(receive);
+receive=transpose(receive);
+combn=ff2n(lenOfOutput);
+combV(:,:)=2*maxV*combn(:,:);
+combV(:,:)=combV(:,:)-maxV;
+noOfCombn=2^lenOfOutput;
+output=[];
+for symNo=1:noOfOut
+    dmin=Inf;
+    for cNo=1:noOfCombn
+        diff=receive(symNo,:)-combV(cNo,:);
+        difft=transpose(diff);
+        dist=diff*difft;
+        if(dist<dmin)
+            dmin=dist;
+            MPS=cNo;
+        end
+    end
+    output=[output,combn(MPS,:)];
+end
+end
+
+function receive=bpskHardReceiver(input,fc,Tsym,noOfSym)
+t=linspace(0,Tsym,Tsym*fc*1000);
+y(:)=((2/Tsym)^(1/2))*cos(2*pi*fc*t(:));
+receive=[];
+for i=1:noOfSym
+    out=input(uint32((i-1)*Tsym*fc*1000+1):uint32(i*Tsym*fc*1000))*y(:);
+    out=out/(fc*1000);
+    if(out>0)
+        receive=[receive , 1];
+    else
+        receive=[receive , 0];
+    end
+end
+end
+
+function receive=BPSKHardReceiver(input)
+[~,noOfSym]=size(input);
+receive=[];
+for i=1:noOfSym
+    if(input(i)>0)
+        receive=[receive , 1];
+    else
+        receive=[receive , 0];
+    end
+end
+end
+
+function receive=BPSKSoftReceiver(input,NoOfBand,A)
+[~,noOfSym]=size(input);
+receive=[];
+basket=linspace(-A,A,NoOfBand-1);
+for i=1:noOfSym
+    if(input(i)<=-A)
+        receive=[receive,0];
+    elseif(input(i)>=A)
+        receive=[receive,NoOfBand-1];
+    else
+        for j=2:NoOfBand-1
+            if(input(i)>basket(j-1)&&input(i)<=basket(j))
+                receive=[receive,j-1];
+                break;
+            end
+        end
+    end
+end
+end
+
+function e=AWGNChannel(seq,stDev)
+[~,sSeq]=size(seq);
+e=stDev*randn(1,sSeq);
+e=seq(:)+e(:);
+e=transpose(e);
+end
+
+Above part is code for Encoder and Decoder
+To test different encoding strategy we only change Encoding function other code changes accordingly.
+For example if we have a 4bit state length and we do xor of all bits and xor of 1st 2 bits.
+This creates 2 bits for one bit input.
+Since error most likely comes in pair, so instead of sending c0 and c1 as just neighbours, rather we should first send all c0's then send all c1's this will reduce the likelyhood of both information bits getting erased.
+This method should be used since in such decoder error accumulates.
+
+Diagram=stateDiagram(8);
+lenOfInput=8;
+input=[1,0,0,1,0,0,0,1]
+output=[];
+prevState=[0,0,0];
+for i=1:8
+    [out,prevState]=Encoder(input(i),prevState);
+    output=[out,output];
+end
+send=bpskSender(output,1,1,5);
+send=AWGNChannel(send,3);
+plot(send);
+receive=bpskSoftReceiver(send,1,1,2*lenOfInput,2,5)
+% receive=bpskHardReceiver(send,1,1,2*lenOfInput);
+plot(receive);
+decoderHard(receive,2,8,Diagram)
+
+noOfInput=1;
+lenOfInput=300;
+noOfState=8;
+lenOfOutput=2;
+% Tsym=0.1;
+% N=100;
+% carrierFreq=N*Tsym;
+maxV=1;
+g=2.5;
+S=1/(g)^(1/2);
+Diagram=stateDiagram(noOfState,noOfInput);
+stats=0;
+NoOfSim=10000;
+for simNo=1:NoOfSim
+    input=randi([0,1],1,lenOfInput);
+    output=[];
+    prevState=zeros(1,log2(noOfState));
+    for i=1:lenOfInput/noOfInput
+        [out,prevState]=Encoder(input((i-1)*noOfInput+1:i*noOfInput),prevState);
+        output=[out,output];
+    end
+    send=BPSKSender(output,maxV);
+    send=AWGNChannel(send,S);
+    % receive=bpskSoftReceiver(send,carrierFreq,Tsym,2*lenOfInput,2,5)
+    receive=BPSKHardReceiver(send);
+    decoded=decoderHard(receive,lenOfOutput,noOfState,Diagram);
+    if(isequal(input,decoded))
+        stats=stats+1;
+    end
+end
+probOfDecoding=stats/NoOfSim
+
+noOfInput=1;
+lenOfInput=16;
+noOfState=8;
+lenOfOutput=2;
+maxV=1;
+noOfBand=8;
+g=0.5;
+S=1/(g)^(1/2);
+Diagram=stateDiagram(noOfState,noOfInput)
+input=randi([0,1],1,lenOfInput)
+output=[];
+prevState=zeros(1,log2(noOfState));
+for i=1:lenOfInput/noOfInput
+    [out,prevState]=Encoder(input((i-1)*noOfInput+1:i*noOfInput),prevState);
+    output=[output,out];
+end
+output
+send=BPSKSender(output,maxV);
+send=AWGNChannel(send,0);
+receive=BPSKSoftReceiver(send,noOfBand,maxV);
+% receive=BPSKHardReceiver(send);
+decoded=decoderSoft(receive,lenOfOutput,noOfState,Diagram,noOfBand)
+% decoded=decoderHard(receive,lenOfOutput,noOfState,Diagram)
+
+x=linspace(-4,4,100);
+v=0.5;
+a=1;
+x1=x-a;
+x1=x1.^2;
+y1=(1/(sqrt(2*pi)*v))*exp(-(1/2)*(x1/v^2));
+x2=x+a;
+x2=x2.^2;
+y2=(1/(sqrt(2*pi)*v))*exp(-(1/2)*(x2/v^2));
+y=x*2*a/v;
+plot(x,y);
+plot(x,y1);
+hold on;
+plot(x,y2);
+hold off;
